@@ -202,9 +202,29 @@ def main():
                 st.error(str(e))
 
         st.subheader("Szybkie linki dla graczy")
-        base = st.request.base_url
-        st.write(f"[Gracz 1]({base}?game={game_id}&role=p1)  |  [Gracz 2]({base}?game={game_id}&role=p2)")
+        st.subheader("Szybkie linki dla graczy")
 
+        components.v1.html(f"""
+        <div style="font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+          <p>Otwórz w nowych kartach:</p>
+          <ul>
+            <li><a id="host"   target="_blank">Host</a></li>
+            <li><a id="p1"     target="_blank">Gracz 1</a></li>
+            <li><a id="p2"     target="_blank">Gracz 2</a></li>
+          </ul>
+        </div>
+        <script>
+          const base = window.location.origin + window.location.pathname;
+          const game = {game_id!r};
+          const mk = role => base + "?game=" + encodeURIComponent(game) + "&role=" + role;
+          document.getElementById("host").href = mk("host");
+          document.getElementById("p1").href   = mk("p1");
+          document.getElementById("p2").href   = mk("p2");
+        </script>
+        """, height=100)
+
+
+  
         st.divider()
         st.subheader("Podgląd zasobów")
         st.write(f"Kart: **{len(game.card_images)}**  |  Twist: **{len(game.twist_images)}**")
@@ -287,3 +307,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
