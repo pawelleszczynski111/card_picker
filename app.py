@@ -10,43 +10,51 @@ import random, os, glob
 st.set_page_config(page_title="Karty z PNG", layout="wide")
 dark_css = """
 <style>
-/* główne tło aplikacji */
-div[data-testid="stAppViewContainer"] {
-    background-color: #111 !important;
-    color: #eee !important;
-}
-
-/* wewnętrzny kontener bloków */
+/* Główne tło */
+div[data-testid="stAppViewContainer"],
 div[data-testid="stAppViewBlockContainer"] {
-    background-color: #111 !important;
-    color: #eee !important;
+  background-color: #111 !important;
+  color: #eee !important;
 }
 
-/* sidebar */
+/* Header / pasek na górze */
+div[data-testid="stHeader"] {
+  background-color: #111 !important;
+  color: #eee !important;
+  border-bottom: 1px solid #222 !important;
+}
+
+/* Pasek ozdobny (akcent) – usuń, jeśli widać jasny pasek */
+div[data-testid="stDecoration"] {
+  background: transparent !important;
+}
+
+/* Sidebar */
 section[data-testid="stSidebar"] {
-    background-color: #1a1a1a !important;
-    color: #eee !important;
+  background-color: #1a1a1a !important;
+  color: #eee !important;
 }
 
-/* tekst, nagłówki */
+/* Teksty */
 h1, h2, h3, h4, h5, h6, p, span, label {
-    color: #eee !important;
+  color: #eee !important;
 }
 
-/* przyciski */
+/* Przyciski */
 .stButton button {
-    background-color: #333 !important;
-    color: #eee !important;
-    border: 1px solid #555;
-    border-radius: 8px;
+  background-color: #333 !important;
+  color: #eee !important;
+  border: 1px solid #555 !important;
+  border-radius: 8px !important;
 }
 .stButton button:hover {
-    background-color: #444 !important;
-    border-color: #888;
+  background-color: #444 !important;
+  border-color: #888 !important;
 }
 </style>
 """
 st.markdown(dark_css, unsafe_allow_html=True)
+
 st.markdown(
     "<style>#MainMenu {visibility:hidden;} footer {visibility:hidden;}</style>",
     unsafe_allow_html=True
@@ -198,6 +206,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
