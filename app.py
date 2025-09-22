@@ -1,5 +1,4 @@
-# app.py — Karty z PNG (bez PDF)
-# wymagania: streamlit, pillow
+# app.py — Karty z PNG (odrzuć osobno, dobierz osobno)
 # uruchom: python -m pip install streamlit pillow
 #          python -m streamlit run app.py
 
@@ -10,7 +9,7 @@ import random, os, glob
 
 st.set_page_config(page_title="Karty z PNG", layout="wide")
 
-DEFAULT_CARDS_DIR = "cards"   # <- tutaj trzymaj swoje pliki .png
+DEFAULT_CARDS_DIR = "cards"   # folder z plikami .png
 
 # ---------- Narzędzia ----------
 def load_png_bytes_from_folder(folder: str):
@@ -81,7 +80,7 @@ def render_hand_ui():
 # ---------- Aplikacja ----------
 def main():
     ensure_state()
-    st.title("Karty z PNG (stałe zasoby)")
+    st.title("Karty z PNG (odrzuć osobno / dobierz osobno)")
 
     with st.sidebar:
         st.header("Ustawienia")
@@ -108,7 +107,7 @@ def main():
         init_deck(st.session_state.images, st.session_state.image_paths)
         st.success("Zresetowano rundę i przetasowano talię.")
 
-    # Auto-inicjalizacja przy pierwszym uruchomieniu (jeśli folder istnieje)
+    # Auto-inicjalizacja przy pierwszym uruchomieniu
     if not st.session_state.images:
         if os.path.isdir(st.session_state.cards_dir):
             imgs, paths = load_png_bytes_from_folder(st.session_state.cards_dir)
@@ -129,24 +128,28 @@ def main():
         render_hand_ui()
         counters()
 
-        left, right = st.columns([1, 3])
+        # --- Przyciski akcji (rozłączone) ---
+        left, mid, right = st.columns([1, 0.1, 1])
 
-        if left.button("Dobierz do pełnej ręki", disabled=not st.session_state.deck):
-            draw_to_hand_size()
-            # wyczyść zaznaczenia
-            for pos in range(len(st.session_state.hand)):
-                st.session_state[f"discard_{pos}"] = False
-
-        if right.button("Odrzuć zaznaczone i dobierz"):
-            # Usuwamy od końca, żeby indeksy się nie rozjechały
+        # 1) Odrzuć zaznaczone — bez dobierania
+        if left.button("Odrzuć zaznaczone"):
+            removed_any = False
             for pos in range(len(st.session_state.hand) - 1, -1, -1):
                 if st.session_state.get(f"discard_{pos}", False):
                     st.session_state.discard.append(st.session_state.hand.pop(pos))
                     st.session_state[f"discard_{pos}"] = False
-            if st.session_state.deck:
-                draw_to_hand_size()
-            else:
-                st.session_state.exhausted = len(st.session_state.hand) < st.session_state.hand_size
+                    removed_any = True
+            if not removed_any:
+                st.info("Nie zaznaczono żadnej karty do odrzucenia.")
+            # ustal czy talia jest wyczerpana względem docelowej wielkości ręki
+            st.session_state.exhausted = len(st.session_state.hand) < st.session_state.hand_size and len(st.session_state.deck) == 0
+
+        # 2) Dobierz do pełnej ręki — tylko dobieranie
+        if right.button("Dobierz do pełnej ręki", disabled=not st.session_state.deck):
+            draw_to_hand_size()
+            # po dociągnięciu wyczyść ewentualne stare checkboxy (indeksy mogły się zmienić)
+            for pos in range(len(st.session_state.hand)):
+                st.session_state[f"discard_{pos}"] = False
 
         if st.session_state.exhausted:
             st.warning("Talia się skończyła. Odrzucone karty nie wracają do puli — nowych już nie dobierzesz.")
