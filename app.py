@@ -181,7 +181,7 @@ def sidebar(room: str, role: str, rs: RoomState):
     # Szybkie linki
     st.sidebar.markdown(
         f"- Host P{room}:  `?room={room}&role=host`\n"
-        f"- Gracz P{room}: `?room={room}&role=player}`"
+        f"- Gracz P{room}: `?room={room}&role=player`"
     )
     st.sidebar.divider()
 
@@ -346,3 +346,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
