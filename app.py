@@ -47,6 +47,11 @@ h1, h2, h3, h4, h5, h6, p, span, label {
 </style>
 """
 st.markdown(dark_css, unsafe_allow_html=True)
+st.markdown(
+    "<style>#MainMenu {visibility:hidden;} footer {visibility:hidden;}</style>",
+    unsafe_allow_html=True
+)
+
 
 
 DEFAULT_CARDS_DIR = "cards"
@@ -193,5 +198,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
