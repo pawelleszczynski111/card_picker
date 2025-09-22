@@ -186,7 +186,7 @@ def render_hand_ui():
 # ---------- App ----------
 def main():
     ensure_state()
-    st.title("Karty z PNG")
+    st.title("Spearhead cards picker")
 
     # Auto-init z 'cards/'
     if not st.session_state.images:
@@ -240,6 +240,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
