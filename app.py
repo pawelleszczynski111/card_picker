@@ -7,7 +7,6 @@ from PIL import Image
 from io import BytesIO
 import random, os, glob
 
-st.set_page_config(page_title="Karty z PNG", layout="wide")
 dark_css = """
 <style>
 /* Główne tło */
@@ -17,14 +16,14 @@ div[data-testid="stAppViewBlockContainer"] {
   color: #eee !important;
 }
 
-/* Header / pasek na górze */
+/* Header */
 div[data-testid="stHeader"] {
   background-color: #111 !important;
   color: #eee !important;
   border-bottom: 1px solid #222 !important;
 }
 
-/* Pasek ozdobny (akcent) – usuń, jeśli widać jasny pasek */
+/* Pasek ozdobny */
 div[data-testid="stDecoration"] {
   background: transparent !important;
 }
@@ -32,6 +31,12 @@ div[data-testid="stDecoration"] {
 /* Sidebar */
 section[data-testid="stSidebar"] {
   background-color: #1a1a1a !important;
+  color: #eee !important;
+}
+
+/* Pasek statusu (z biegającym ludzikiem) */
+div[data-testid="stStatusWidget"] {
+  background-color: #111 !important;
   color: #eee !important;
 }
 
@@ -55,10 +60,7 @@ h1, h2, h3, h4, h5, h6, p, span, label {
 """
 st.markdown(dark_css, unsafe_allow_html=True)
 
-st.markdown(
-    "<style>#MainMenu {visibility:hidden;} footer {visibility:hidden;}</style>",
-    unsafe_allow_html=True
-)
+
 
 
 
@@ -206,6 +208,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
