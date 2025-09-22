@@ -1,10 +1,13 @@
-# app.py — Dwuosobowa gra z PNG + osobna pula "twist"
+# app.py — Dwuosobowa gra: zwykłe karty z PNG + osobna pula "twist" z folderu gyhran/
 # uruchom: python -m pip install streamlit pillow
 #          python -m streamlit run app.py
-# URL-e:
+#
+# Przykładowe URL-e:
 #   HOST:   http://localhost:8501/?game=demo&role=host
 #   GRACZ1: http://localhost:8501/?game=demo&role=p1
 #   GRACZ2: http://localhost:8501/?game=demo&role=p2
+#
+# Uwaga: folder "gyhran" NIE jest w "cards". To osobny folder z PNG twist (np. g1.png ... g6.png).
 
 import streamlit as st
 from PIL import Image
@@ -13,12 +16,12 @@ import random, os, glob, threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-st.set_page_config(page_title="Karty 2-graczy (PNG + Twist)", layout="wide")
+st.set_page_config(page_title="Karty 2 graczy (PNG + Twist)", layout="wide")
 
 DEFAULT_CARDS_DIR = "cards"     # zwykłe karty (PNG)
-DEFAULT_TWIST_DIR = "gyhran"    # karty twist: g1.png ... g6.png
+DEFAULT_TWIST_DIR = "gyhran"    # karty twist (PNG, np. g1.png ... g6.png)
 
-# ---------- Narzędzia IO ----------
+# ---------- IO: wczytywanie PNG ----------
 
 def load_png_bytes_from_folder(folder: str) -> tuple[list[bytes], list[str]]:
     paths = sorted(glob.glob(os.path.join(folder, "*.png")))
@@ -30,7 +33,7 @@ def load_png_bytes_from_folder(folder: str) -> tuple[list[bytes], list[str]]:
             imgs.append(buf.getvalue())
     return imgs, paths
 
-# ---------- Globalny magazyn gier (w pamięci serwera) ----------
+# ---------- Globalny magazyn gier (w pamięci procesu) ----------
 
 @dataclass
 class GameState:
@@ -65,14 +68,15 @@ class GameState:
             random.seed(self.seed)
 
     def initialize_from_dirs(self):
+        """Wczytaj PNG z self.cards_dir oraz self.twist_dir i zainicjalizuj talie."""
         self.reseed()
         imgs, paths = load_png_bytes_from_folder(self.cards_dir)
         timgs, tpaths = load_png_bytes_from_folder(self.twist_dir)
 
         if not imgs:
-            raise RuntimeError(f"Brak PNG w folderze kart: {self.cards_dir}")
+            raise RuntimeError(f"Brak plików PNG w folderze kart: {self.cards_dir}")
         if not timgs:
-            raise RuntimeError(f"Brak PNG w folderze twist: {self.twist_dir}")
+            raise RuntimeError(f"Brak plików PNG w folderze twist: {self.twist_dir}")
 
         self.card_images, self.card_paths = imgs, paths
         self.twist_images, self.twist_paths = timgs, tpaths
@@ -91,7 +95,7 @@ class GameState:
         self.twist_current = {"p1": None, "p2": None}
 
     def draw_up_to_full(self, player: str):
-        """Dobierz zwykłe karty do pełnej ręki (bez użycia odrzuconych)."""
+        """Dobierz zwykłe karty do pełnej ręki (odrzucone nie wracają)."""
         with self.locked:
             target = self.hand_size
             hand = self.hands[player]
@@ -110,19 +114,18 @@ class GameState:
                     self.discard.append(idx)
 
     def change_twist(self, player: str):
-        """Odrzuć bieżący twist gracza i dociągnij nowy z puli twist."""
+        """Odrzuć bieżący twist gracza i dociągnij nowy z puli twist (niezależnej od zwykłej talii)."""
         with self.locked:
             # odrzuć bieżący twist (jeśli był)
             cur = self.twist_current.get(player)
             if cur is not None:
                 self.twist_discard.append(cur)
                 self.twist_current[player] = None
-            # dobierz nowy (jeśli są)
+            # dobierz nowy (jeśli są w talii twist)
             if self.twist_deck:
                 self.twist_current[player] = self.twist_deck.pop()
-            # brak kart twist -> zostaje None
+            # jeśli skończą się twist — zostaje None (brak karty twist)
 
-# Wspólny magazyn stanów gier (klucz = game_id)
 @st.cache_resource
 def get_store() -> Dict[str, GameState]:
     return {}
@@ -139,10 +142,12 @@ def show_image(img_bytes: bytes, caption: Optional[str] = None):
     im = Image.open(BytesIO(img_bytes))
     st.image(im, use_column_width=True, caption=caption)
 
-def discard_key(idx: int, player: str) -> str:
+def discard_key(player: str, idx: int) -> str:
+    # stabilny klucz checkboxa po ID karty i graczu
     return f"discard_card_{player}_{idx}"
 
 def clear_obsolete_flags(player: str, alive_ids: set[int]):
+    """Usuń z session_state flagi kart, których nie ma już ani w ręce gracza, ani w talii."""
     for k in list(st.session_state.keys()):
         if k.startswith(f"discard_card_{player}_"):
             try:
@@ -156,17 +161,16 @@ def clear_obsolete_flags(player: str, alive_ids: set[int]):
 
 def main():
     # Parametry z URL: ?game=...&role=host|p1|p2
-    qp = st.query_params
-    game_id = qp.get("game", ["default"])[0] if isinstance(qp.get("game"), list) else qp.get("game", "default")
-    role    = qp.get("role", ["host"])[0] if isinstance(qp.get("role"), list) else qp.get("role", "host")
+    qp = st.query_params  # Streamlit >= 1.32
+    game_id = qp.get("game", "default")
+    role    = qp.get("role", "host")
     if role not in ("host", "p1", "p2"):
         role = "host"
 
     st.title(f"Gra 2-osobowa — pokój **{game_id}** ({'HOST' if role=='host' else role.upper()})")
-
     game = get_game(game_id)
 
-    # --- Panel HOSTA ---
+    # --- PANEL HOSTA ---
     if role == "host":
         st.sidebar.header("Ustawienia (HOST)")
         cards_dir = st.sidebar.text_input("Folder kart (PNG)", value=game.cards_dir)
@@ -175,8 +179,8 @@ def main():
         seed = st.sidebar.text_input("Seed (opcjonalnie)", value=game.seed or "")
         col1, col2 = st.sidebar.columns(2)
         reload_clicked = col1.button("🔄 Załaduj z dysku")
-        reset_clicked = col2.button("♻️ Reset rundy")
-        st.sidebar.caption("Po załadowaniu/ resecie gracze zobaczą zmiany u siebie.")
+        reset_clicked  = col2.button("♻️ Reset rundy")
+        st.sidebar.caption("Po załadowaniu/resetcie gracze zobaczą zmiany.")
 
         if reload_clicked:
             try:
@@ -195,54 +199,39 @@ def main():
                 with game.locked:
                     game.hand_size = hand_size
                     game.seed = seed or None
-                    # ponowna inicjalizacja z bieżących katalogów
                     game.initialize_from_dirs()
                 st.success("Zresetowano rundę (tasowanie talii).")
             except Exception as e:
                 st.error(str(e))
 
         st.subheader("Szybkie linki dla graczy")
-        st.subheader("Szybkie linki dla graczy")
+        st.markdown(
+            f"""
+- [Host (ten widok)](?game={game_id}&role=host)  
+- [Gracz 1](?game={game_id}&role=p1)  
+- [Gracz 2](?game={game_id}&role=p2)
+""",
+            unsafe_allow_html=False
+        )
 
-        components.v1.html(f"""
-        <div style="font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
-          <p>Otwórz w nowych kartach:</p>
-          <ul>
-            <li><a id="host"   target="_blank">Host</a></li>
-            <li><a id="p1"     target="_blank">Gracz 1</a></li>
-            <li><a id="p2"     target="_blank">Gracz 2</a></li>
-          </ul>
-        </div>
-        <script>
-          const base = window.location.origin + window.location.pathname;
-          const game = {game_id!r};
-          const mk = role => base + "?game=" + encodeURIComponent(game) + "&role=" + role;
-          document.getElementById("host").href = mk("host");
-          document.getElementById("p1").href   = mk("p1");
-          document.getElementById("p2").href   = mk("p2");
-        </script>
-        """, height=100)
-
-
-  
         st.divider()
         st.subheader("Podgląd zasobów")
-        st.write(f"Kart: **{len(game.card_images)}**  |  Twist: **{len(game.twist_images)}**")
+        st.write(f"Kart zwykłych: **{len(game.card_images)}**  |  Twist: **{len(game.twist_images)}**")
         st.write(f"Talia: {len(game.deck)} | Odrzucone: {len(game.discard)}")
         st.write(f"Twist talia: {len(game.twist_deck)} | Twist odrzucone: {len(game.twist_discard)}")
         st.write(f"Ręka P1: {len(game.hands['p1'])} | Ręka P2: {len(game.hands['p2'])}")
         st.write(f"Twist P1: {game.twist_current['p1']} | Twist P2: {game.twist_current['p2']}")
-        st.info("Wejdź jako p1/p2 w nowej karcie, żeby zobaczyć widok gracza.")
+        st.info("Otwórz linki p1/p2 w nowych kartach, aby zobaczyć widoki graczy.")
 
-    # --- Widok GRACZA ---
+    # --- WIDOK GRACZA ---
     else:
-        # jeśli gra nie została zainicjalizowana przez hosta — spróbuj samoczynnie z domyślnych folderów
+        # jeśli host jeszcze nie zainicjalizował, spróbuj z domyślnych folderów
         if not game.card_images or not game.twist_images:
             try:
                 with game.locked:
                     game.initialize_from_dirs()
             except Exception as e:
-                st.error(f"Host jeszcze nie załadował kart, a pod domyślną ścieżką ich brak.\nSzczegóły: {e}")
+                st.error(f"Host nie załadował kart, a pod domyślnymi ścieżkami ich brak.\nSzczegóły: {e}")
                 st.stop()
 
         # Start: dociągnij do pełnej ręki
@@ -257,35 +246,42 @@ def main():
         st.caption(
             f"Ręka: **{len(game.hands[role])}/{game.hand_size}** | "
             f"Wspólna talia: **{len(game.deck)}** | "
-            f"Twoje twist: {'brak' if game.twist_current[role] is None else 'jest'} | "
+            f"Twist: {'brak' if game.twist_current[role] is None else 'jest'} | "
             f"Pozostałe twist: **{len(game.twist_deck)}**"
         )
 
         cols_top = st.columns([2, 1])
+
         # --- RĘKA GRACZA ---
         with cols_top[0]:
             st.subheader("Twoja ręka")
             cols = st.columns(max(game.hand_size, 1), gap="small")
+            # żywe ID do czyszczenia starych checkboxów
             alive_ids = set(game.hands[role]) | set(game.deck)
-            # render kart z checkboxami
+
             for pos, idx in enumerate(game.hands[role]):
                 with cols[pos % max(game.hand_size, 1)]:
                     show_image(game.card_images[idx])
-                    st.checkbox("Odrzuć tę kartę", key=discard_key(idx, role))
+                    st.checkbox("Odrzuć tę kartę", key=discard_key(role, idx))
+
             clear_obsolete_flags(role, alive_ids)
 
             c1, c2 = st.columns([1, 1])
-            # Odrzuć zaznaczone
+            # Odrzuć zaznaczone (bez dobierania)
             if c1.button("Odrzuć zaznaczone"):
-                selected = [idx for idx in list(game.hands[role]) if st.session_state.get(discard_key(idx, role), False)]
+                selected = [idx for idx in list(game.hands[role]) if st.session_state.get(discard_key(role, idx), False)]
                 if selected:
                     game.discard_selected(role, selected)
                     for idx in selected:
-                        st.session_state.pop(discard_key(idx, role), None)
+                        st.session_state.pop(discard_key(role, idx), None)
                 else:
                     st.info("Nie zaznaczono żadnej karty.")
-            # Dobierz do pełnej
-            if c2.button("Dobierz do pełnej ręki", disabled=(len(game.deck) == 0 or len(game.hands[role]) >= game.hand_size)):
+
+            # Dobierz do pełnej ręki
+            if c2.button(
+                "Dobierz do pełnej ręki",
+                disabled=(len(game.deck) == 0 or len(game.hands[role]) >= game.hand_size)
+            ):
                 game.draw_up_to_full(role)
 
         # --- TWIST GRACZA ---
@@ -297,14 +293,16 @@ def main():
             else:
                 st.info("Brak karty twist.")
 
-            if st.button("Zmień kartę twist", disabled=(len(game.twist_deck) == 0 and cur is None)):
+            if st.button(
+                "Zmień kartę twist",
+                disabled=(len(game.twist_deck) == 0 and cur is None)
+            ):
                 game.change_twist(role)
                 if game.twist_current[role] is None:
                     st.warning("Skończyły się karty twist.")
 
         st.divider()
-        st.caption("Uwaga: Odrzucone karty (zarówno zwykłe, jak i twist) nie wracają do puli. Host zarządza resetem/ustawieniami.")
+        st.caption("Odrzucone (zwykłe i twist) nie wracają do puli. Reset/ustawienia po stronie HOSTA.")
 
 if __name__ == "__main__":
     main()
-
