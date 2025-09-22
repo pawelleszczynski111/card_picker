@@ -10,18 +10,27 @@ import random, os, glob
 st.set_page_config(page_title="Karty z PNG", layout="wide")
 dark_css = """
 <style>
-/* całe tło i tekst */
-html, body, [class^="css"]  {
+/* główne tło aplikacji */
+div[data-testid="stAppViewContainer"] {
     background-color: #111 !important;
     color: #eee !important;
 }
 
-/* karty (kontenery) */
-.stCard, .stDataFrame, .stMarkdown, .stButton, .stSelectbox, .stRadio, .stCheckbox {
-    background-color: #222 !important;
+/* wewnętrzny kontener bloków */
+div[data-testid="stAppViewBlockContainer"] {
+    background-color: #111 !important;
     color: #eee !important;
-    border-radius: 10px;
-    padding: 4px;
+}
+
+/* sidebar */
+section[data-testid="stSidebar"] {
+    background-color: #1a1a1a !important;
+    color: #eee !important;
+}
+
+/* tekst, nagłówki */
+h1, h2, h3, h4, h5, h6, p, span, label {
+    color: #eee !important;
 }
 
 /* przyciski */
@@ -38,6 +47,7 @@ html, body, [class^="css"]  {
 </style>
 """
 st.markdown(dark_css, unsafe_allow_html=True)
+
 
 DEFAULT_CARDS_DIR = "cards"
 HAND_SIZE = 3  # stała: ręka zawsze 3
@@ -183,4 +193,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
