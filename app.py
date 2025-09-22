@@ -56,6 +56,18 @@ h1, h2, h3, h4, h5, h6, p, span, label {
   background-color: #444 !important;
   border-color: #888 !important;
 }
+
+/* body + główny wrapper */
+html, body {
+  background-color: #111 !important;
+  color: #eee !important;
+}
+
+/* główny kontener na treść (środkowy blok) */
+.block-container {
+  background-color: #111 !important;
+}
+
 </style>
 """
 st.markdown(dark_css, unsafe_allow_html=True)
@@ -208,6 +220,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
