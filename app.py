@@ -1,169 +1,352 @@
-# app.py — Karty z PDF (odrzucone NIE wracają do puli)
-# Wymagane pakiety: streamlit, pymupdf, pillow
+# app.py — 2 graczy: p1 = HOST, dwie identyczne (ale oddzielne) talie, WSPÓLNY twist
+# uruchom: python -m pip install streamlit pillow
+#          python -m streamlit run app.py
+#
+# Foldery:
+#   cards/  -> zwykłe karty PNG (identyczny zestaw dla obu graczy)
+#   gyhran/ -> karty twist PNG (np. g1.png...g6.png) — WSPÓLNA pula twist
+#
+# URL-e:
+#   P1 (HOST): http://localhost:8501/?game=demo&role=p1
+#   P2:        http://localhost:8501/?game=demo&role=p2
 
 import streamlit as st
 from PIL import Image
-import fitz  # PyMuPDF
 from io import BytesIO
-import random
+import random, os, glob, threading
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 
-# --- USTAWIENIA ---
-HAND_SIZE = 3  # rozmiar ręki (3 karty)
+st.set_page_config(page_title="Karty (2 graczy, wspólny twist)", layout="wide")
 
-st.set_page_config(page_title="Karty z PDF", layout="wide")
+DEFAULT_CARDS_DIR = "cards"
+DEFAULT_TWIST_DIR = "gyhran"
 
-# --- NARZĘDZIA ---
+# ---------- IO: wczytywanie PNG ----------
 
-@st.cache_resource(show_spinner=False)
-def load_pdf_to_images(pdf_bytes: bytes, dpi: int = 144):
-    """
-    Renderuje strony PDF do listy obrazów PNG (bytes).
-    Cache'owane na bazie bytes, więc ponowne wgranie tego samego pliku nie renderuje na nowo.
-    """
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    imgs = []
-    for page in doc:
-        pix = page.get_pixmap(dpi=dpi, alpha=False)
-        imgs.append(pix.tobytes("png"))
-    doc.close()
-    return imgs
+def load_png_bytes_from_folder(folder: str) -> Tuple[List[bytes], List[str]]:
+    paths = sorted(glob.glob(os.path.join(folder, "*.png")))
+    imgs: List[bytes] = []
+    for p in paths:
+        with Image.open(p) as im:
+            buf = BytesIO()
+            im.convert("RGBA").save(buf, format="PNG")
+            imgs.append(buf.getvalue())
+    return imgs, paths
 
-def ensure_state():
-    defaults = {
-        "images": [],      # list[bytes] — obrazki kart
-        "deck": [],        # list[int] — indeksy kart w talii (do dociągnięcia)
-        "discard": [],     # list[int] — indeksy kart odrzuconych (NIE wracają)
-        "hand": [],        # list[int] — aktualna ręka
-        "file_name": None, # nazwa wgranego pliku
-        "exhausted": False # flaga: talia wyczerpana i nie da się dociągać do pełnych 3
-    }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
+# ---------- Pomoc: query params zgodne wstecznie ----------
 
-def init_deck(images, file_name):
-    st.session_state.images = images
-    st.session_state.file_name = file_name
-    st.session_state.deck = list(range(len(images)))
-    random.shuffle(st.session_state.deck)
-    st.session_state.discard = []
-    st.session_state.hand = []
-    st.session_state.exhausted = False
+def get_query_params() -> Dict[str, List[str]]:
+    # Streamlit >= 1.32: st.query_params (Mapping[str,str])
+    # starsze: st.experimental_get_query_params() -> Dict[str, List[str]]
+    try:
+        qp = st.query_params
+        if isinstance(qp, dict):
+            # zamień na listy dla zgodności
+            return {k: [v] if not isinstance(v, list) else v for k, v in qp.items()}
+        return {}
+    except Exception:
+        try:
+            return st.experimental_get_query_params()
+        except Exception:
+            return {}
 
-def reset_round():
-    """Reset rundy na podstawie aktualnie wgranego PDF-a."""
-    if st.session_state.images:
-        init_deck(st.session_state.images, st.session_state.file_name)
+def qp_get(qp: Dict[str, List[str]], key: str, default: str) -> str:
+    vals = qp.get(key, [])
+    if not vals:
+        return default
+    return vals[0]
 
-def draw_to_three():
-    """
-    Dobiera karty z 'deck' do osiągnięcia HAND_SIZE.
-    ODRZUCONE NIE WRACAJĄ: nie sięgamy do discard — jeśli deck pusty, kończymy.
-    """
-    hand = st.session_state.hand
-    deck = st.session_state.deck
+# ---------- Globalny magazyn gier (w pamięci procesu) ----------
 
-    while len(hand) < HAND_SIZE and deck:
-        nxt = deck.pop()
-        if nxt not in hand:
-            hand.append(nxt)
+@dataclass
+class GameState:
+    # zasoby
+    card_images: List[bytes] = field(default_factory=list)
+    card_paths: List[str] = field(default_factory=list)
 
-    # Jeśli nie udało się uzupełnić do pełnej ręki i talia pusta — oznacz koniec
-    st.session_state.exhausted = (len(hand) < HAND_SIZE) and (len(deck) == 0)
+    twist_images: List[bytes] = field(default_factory=list)
+    twist_paths: List[str] = field(default_factory=list)
 
-def counters():
-    hand_n = len(st.session_state.hand)
-    deck_n = len(st.session_state.deck)
-    discard_n = len(st.session_state.discard)
-    st.caption(f"Ręka: **{hand_n}** | W talii: **{deck_n}** | Odrzucone: **{discard_n}**")
+    # ustawienia
+    hand_size: int = 3
+    seed: Optional[str] = None
+    cards_dir: str = DEFAULT_CARDS_DIR
+    twist_dir: str = DEFAULT_TWIST_DIR
 
-def render_hand_and_discard_ui():
-    hand = st.session_state.hand
-    images = st.session_state.images
+    # talie / stany — OSOBNE dla p1 i p2 (identyczny układ na starcie)
+    deck_p1: List[int] = field(default_factory=list)
+    deck_p2: List[int] = field(default_factory=list)
+    discard_p1: List[int] = field(default_factory=list)
+    discard_p2: List[int] = field(default_factory=list)
+    hand_p1: List[int] = field(default_factory=list)
+    hand_p2: List[int] = field(default_factory=list)
 
-    # Pokazuj karty w kolumnach (do 3)
-    cols = st.columns(max(1, HAND_SIZE), gap="small")
+    # TWIST — WSPÓLNY
+    twist_deck: List[int] = field(default_factory=list)     # wspólna talia twist
+    twist_discard: List[int] = field(default_factory=list)  # wspólny odrzut twist
+    twist_current: Optional[int] = None                     # wspólna bieżąca karta twist
 
-    # Tworzymy checkbox dla każdej karty w ręce
-    for pos, idx in enumerate(hand):
-        with cols[pos % HAND_SIZE]:
-            img = Image.open(BytesIO(images[idx]))
-            st.image(img, use_column_width=True)
-            st.checkbox("Odrzuć tę kartę", key=f"discard_{pos}", value=False)
+    # meta
+    locked: threading.Lock = field(default_factory=threading.Lock)
 
-    # Przyciski akcji
-    left, mid, right = st.columns([1, 1, 2])
+    # --- logika inicjalizacji ---
+    def reseed(self):
+        if self.seed:
+            random.seed(self.seed)
 
-    with left:
-        st.button(
-            "Dobierz do 3",
-            disabled=(not st.session_state.deck),
-            on_click=draw_to_three
-        )
+    def initialize_from_dirs(self):
+        """Wczytaj PNG i zainicjalizuj DWIE IDENTYCZNE talie + WSPÓLNY twist."""
+        self.reseed()
+        imgs, paths = load_png_bytes_from_folder(self.cards_dir)
+        timgs, tpaths = load_png_bytes_from_folder(self.twist_dir)
 
-    def discard_and_draw():
-        # Zbierz zaznaczone checkboxy i odrzuć od końca, by nie psuć indeksów
-        for pos in range(len(st.session_state.hand) - 1, -1, -1):
-            if st.session_state.get(f"discard_{pos}", False):
-                st.session_state.discard.append(st.session_state.hand.pop(pos))
-        # Wyczyść checkboxy (mogą zostać „sierotami” po zmianie ręki)
-        for k in list(st.session_state.keys()):
-            if k.startswith("discard_"):
-                st.session_state[k] = False
-        # Spróbuj dobrać, jeśli talia nie jest pusta
-        if st.session_state.deck:
-            draw_to_three()
-        else:
-            st.session_state.exhausted = len(st.session_state.hand) < HAND_SIZE
+        if not imgs:
+            raise RuntimeError(f"Brak plików PNG w folderze kart: {self.cards_dir}")
+        if not timgs:
+            raise RuntimeError(f"Brak plików PNG w folderze twist: {self.twist_dir}")
 
-    with mid:
-        st.button("Odrzuć zaznaczone i dobierz", on_click=discard_and_draw)
+        self.card_images, self.card_paths = imgs, paths
+        self.twist_images, self.twist_paths = timgs, tpaths
 
-    with right:
-        st.button("🔄 Reset rundy", on_click=reset_round, help="Tasuje całą talię od nowa (ten sam PDF).")
+        base_order = list(range(len(self.card_images)))
+        random.shuffle(base_order)          # JEDEN układ bazowy
+        self.deck_p1 = base_order.copy()    # identyczne talie
+        self.deck_p2 = base_order.copy()
 
-    # Komunikat o wyczerpaniu talii
-    if st.session_state.exhausted:
-        st.warning("Talia się skończyła. Odrzucone karty nie wracają do puli, więc nie da się już dobrać nowych.")
+        self.discard_p1, self.discard_p2 = [], []
+        self.hand_p1, self.hand_p2 = [], []
 
-# --- APLIKACJA ---
+        # twist
+        self.twist_deck = list(range(len(self.twist_images)))
+        random.shuffle(self.twist_deck)
+        self.twist_discard = []
+        self.twist_current = None  # dobierzemy przy wejściu gracza
+
+    # --- operacje na rękach ---
+    def draw_up_to_full(self, player: str):
+        """Dobierz zwykłe karty do pełnej ręki gracza (odrzucone nie wracają)."""
+        with self.locked:
+            target = self.hand_size
+            if player == "p1":
+                hand, deck = self.hand_p1, self.deck_p1
+            else:
+                hand, deck = self.hand_p2, self.deck_p2
+
+            while len(hand) < target and deck:
+                nxt = deck.pop()
+                if nxt not in hand:
+                    hand.append(nxt)
+
+    def discard_selected(self, player: str, to_discard: List[int]):
+        """Odrzuć wskazane indeksy kart gracza (ID = indeksy w card_images)."""
+        with self.locked:
+            if player == "p1":
+                hand, discard = self.hand_p1, self.discard_p1
+            else:
+                hand, discard = self.hand_p2, self.discard_p2
+            for idx in to_discard:
+                if idx in hand:
+                    hand.remove(idx)
+                    discard.append(idx)
+
+    # --- TWIST (WSPÓLNY) ---
+    def ensure_twist_exists(self):
+        """Jeśli nie ma bieżącej karty twist, a talia twist nie jest pusta — dobierz jedną (wspólną)."""
+        with self.locked:
+            if self.twist_current is None and self.twist_deck:
+                self.twist_current = self.twist_deck.pop()
+
+    def change_twist(self, requester: str):
+        """Zmiana twistu — dozwolona TYLKO dla p1 (host)."""
+        if requester != "p1":
+            return  # ignoruj żądanie p2
+        with self.locked:
+            if self.twist_current is not None:
+                self.twist_discard.append(self.twist_current)
+                self.twist_current = None
+            if self.twist_deck:
+                self.twist_current = self.twist_deck.pop()
+            # jeśli brak w talii twist — pozostanie None
+
+@st.cache_resource
+def get_store() -> Dict[str, GameState]:
+    return {}
+
+def get_game(game_id: str) -> GameState:
+    store = get_store()
+    if game_id not in store:
+        store[game_id] = GameState()
+    return store[game_id]
+
+# ---------- Pomocnicze UI ----------
+
+def show_image(img_bytes: bytes, caption: Optional[str] = None):
+    im = Image.open(BytesIO(img_bytes))
+    st.image(im, use_column_width=True, caption=caption)
+
+def discard_key(player: str, idx: int) -> str:
+    # stabilny klucz checkboxa po ID karty i graczu
+    return f"discard_card_{player}_{idx}"
+
+def clear_obsolete_flags(player: str, alive_ids: set[int]):
+    """Usuń z session_state flagi kart, których już nie ma ani w ręce gracza, ani w jego talii."""
+    for k in list(st.session_state.keys()):
+        prefix = f"discard_card_{player}_"
+        if k.startswith(prefix):
+            try:
+                idx = int(k.split("_")[-1])
+            except ValueError:
+                continue
+            if idx not in alive_ids:
+                st.session_state.pop(k, None)
+
+# ---------- Aplikacja ----------
 
 def main():
-    ensure_state()
+    # Parametry z URL: ?game=...&role=p1|p2 (p1 = host)
+    qp = get_query_params()
+    game_id = qp_get(qp, "game", "default")
+    role    = qp_get(qp, "role", "p1")
+    if role not in ("p1", "p2"):  # hostem ZAWSZE jest p1
+        role = "p1"
 
-    st.title("Karty z PDF (odrzucone nie wracają)")
-    st.write("Wgraj PDF — każda strona to karta. Aplikacja dobiera do 3 kart, "
-             "pozwala odrzucać dowolną liczbę i dobierać dalej. Odrzucone karty **nie wracają** do puli.")
+    st.title(f"Gra 2-osobowa — pokój **{game_id}** ({role.upper()}{' = HOST' if role=='p1' else ''})")
+    game = get_game(game_id)
 
-    with st.sidebar:
-        st.header("Plik PDF")
-        uploaded = st.file_uploader("Wgraj PDF", type=["pdf"])
-        st.markdown("---")
-        st.caption("Wskazówka: jeśli wgrasz ten sam PDF ponownie, render będzie użyty z cache.")
+    # --- PANEL HOSTA (tylko p1) ---
+    if role == "p1":
+        st.sidebar.header("Ustawienia (HOST = p1)")
+        cards_dir = st.sidebar.text_input("Folder kart (PNG)", value=game.cards_dir)
+        twist_dir = st.sidebar.text_input("Folder twist (PNG)", value=game.twist_dir)
+        hand_size = st.sidebar.number_input("Wielkość ręki", 1, 10, game.hand_size, 1)
+        seed = st.sidebar.text_input("Seed (opcjonalnie)", value=game.seed or "")
+        col1, col2 = st.sidebar.columns(2)
+        reload_clicked = col1.button("🔄 Załaduj z dysku")
+        reset_clicked  = col2.button("♻️ Reset rundy")
+        st.sidebar.caption("Reset odtwarza DWIE IDENTYCZNE talie i WSPÓLNY twist od nowa.")
 
-    # Obsługa nowego uploadu
-    if uploaded is not None:
-        new_file = (uploaded.name != st.session_state.get("file_name"))
-        if new_file:
-            with st.spinner("Renderuję PDF…"):
-                imgs = load_pdf_to_images(uploaded.read())
-            if not imgs:
-                st.error("PDF nie zawiera stron.")
-                return
-            init_deck(imgs, uploaded.name)
-            st.success(f"Wczytano: **{uploaded.name}** — liczba kart: **{len(imgs)}**")
+        if reload_clicked:
+            try:
+                with game.locked:
+                    game.cards_dir = cards_dir
+                    game.twist_dir = twist_dir
+                    game.hand_size = hand_size
+                    game.seed = seed or None
+                    game.initialize_from_dirs()
+                st.success("Załadowano zasoby i zainicjowano grę.")
+            except Exception as e:
+                st.error(str(e))
 
-    # Główna logika ekranu
-    if st.session_state.images:
-        # Pierwsze automatyczne dobranie do 3 po wgraniu
-        if not st.session_state.hand:
-            draw_to_three()
+        if reset_clicked:
+            try:
+                with game.locked:
+                    game.hand_size = hand_size
+                    game.seed = seed or None
+                    game.initialize_from_dirs()
+                st.success("Zresetowano rundę (tasowanie talii + wspólny twist).")
+            except Exception as e:
+                st.error(str(e))
 
-        counters()
-        render_hand_and_discard_ui()
-        counters()
+        st.subheader("Szybkie linki")
+        st.markdown(
+            f"""
+- [Widok p1 (host)](?game={game_id}&role=p1)  
+- [Widok p2](?game={game_id}&role=p2)
+""",
+            unsafe_allow_html=False
+        )
+
+    # --- WIDOK GRACZA (p1 i p2) ---
+    # (jeśli host jeszcze nie zainicjalizował, spróbuj z domyślnych folderów)
+    if not game.card_images or not game.twist_images:
+        try:
+            with game.locked:
+                game.initialize_from_dirs()
+        except Exception as e:
+            st.error(f"Brak zainicjalizowanych zasobów.\nSzczegóły: {e}")
+            st.stop()
+
+    # Start: dobierz do pełnej ręki dla aktywnego gracza
+    if role == "p1":
+        if len(game.hand_p1) < game.hand_size:
+            game.draw_up_to_full("p1")
     else:
-        st.info("Najpierw wgraj plik PDF w panelu po lewej.")
+        if len(game.hand_p2) < game.hand_size:
+            game.draw_up_to_full("p2")
+
+    # Start: zapewnij wspólny twist (jeśli brak)
+    game.ensure_twist_exists()
+
+    # Stan nagłówkowy
+    deck_len = len(game.deck_p1) if role == "p1" else len(game.deck_p2)
+    hand_len = len(game.hand_p1) if role == "p1" else len(game.hand_p2)
+    st.caption(
+        f"Twoja ręka: **{hand_len}/{game.hand_size}** | "
+        f"Twoja talia: **{deck_len}** | "
+        f"Wspólna pula twist: **{len(game.twist_deck)}** | "
+        f"Aktualny twist: {'brak' if game.twist_current is None else 'jest'}"
+    )
+
+    cols_top = st.columns([2, 1])
+
+    # --- RĘKA GRACZA ---
+    with cols_top[0]:
+        st.subheader("Twoja ręka")
+        cols = st.columns(max(game.hand_size, 1), gap="small")
+
+        if role == "p1":
+            hand = game.hand_p1
+            deck = game.deck_p1
+            discard_list = game.discard_p1
+        else:
+            hand = game.hand_p2
+            deck = game.deck_p2
+            discard_list = game.discard_p2
+
+        alive_ids = set(hand) | set(deck)  # do czyszczenia checkboxów
+
+        for pos, idx in enumerate(hand):
+            with cols[pos % max(game.hand_size, 1)]:
+                show_image(game.card_images[idx])
+                st.checkbox("Odrzuć tę kartę", key=discard_key(role, idx))
+
+        clear_obsolete_flags(role, alive_ids)
+
+        c1, c2 = st.columns([1, 1])
+        # Odrzuć zaznaczone (bez dobierania)
+        if c1.button("Odrzuć zaznaczone"):
+            selected = [idx for idx in list(hand) if st.session_state.get(discard_key(role, idx), False)]
+            if selected:
+                game.discard_selected(role, selected)
+                for idx in selected:
+                    st.session_state.pop(discard_key(role, idx), None)
+            else:
+                st.info("Nie zaznaczono żadnej karty.")
+        # Dobierz do pełnej ręki
+        if c2.button(
+            "Dobierz do pełnej ręki",
+            disabled=(len(deck) == 0 or len(hand) >= game.hand_size)
+        ):
+            game.draw_up_to_full(role)
+
+    # --- TWIST (WSPÓLNY) ---
+    with cols_top[1]:
+        st.subheader("Twist (wspólny)")
+        if game.twist_current is not None:
+            show_image(game.twist_images[game.twist_current])
+        else:
+            st.info("Brak karty twist (pula wyczerpana).")
+
+        # Zmienić twist może tylko p1 (host); p2 ma wyłączony przycisk
+        can_change = (role == "p1") and (len(game.twist_deck) > 0 or game.twist_current is not None)
+        if st.button("Zmień kartę twist (tylko p1)", disabled=not can_change):
+            game.change_twist(requester=role)
+            if game.twist_current is None:
+                st.warning("Skończyły się karty twist.")
+
+    st.divider()
+    st.caption("Odrzucone (zwykłe i twist) nie wracają do puli. Hostem jest zawsze p1; każda talia jest osobna, ale identyczna na starcie.")
 
 if __name__ == "__main__":
     main()
