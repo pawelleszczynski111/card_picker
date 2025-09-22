@@ -68,6 +68,26 @@ html, body {
   background-color: #111 !important;
 }
 
+/* Toolbar u góry (tam gdzie przycisk Stop i ikonka) */
+header[data-testid="stHeader"] {
+  background-color: #111 !important;
+  color: #eee !important;
+  border-bottom: 1px solid #222 !important;
+}
+
+/* Pasek statusu (z ludzikiem) */
+div[data-testid="stStatusWidget"] {
+  background-color: #111 !important;
+  color: #eee !important;
+}
+
+/* Pasek narzędzi (Stop, menu, dostępność) */
+div[data-testid="stToolbar"] {
+  background-color: #111 !important;
+  color: #eee !important;
+}
+
+
 </style>
 """
 st.markdown(dark_css, unsafe_allow_html=True)
@@ -220,6 +240,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
