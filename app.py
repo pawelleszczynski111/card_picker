@@ -1,129 +1,157 @@
-# app.py — Streamlit "karty z PDF" (odrzucone karty NIE wracają do talii)
-# pip install streamlit pymupdf pillow
+# app.py — Karty z PNG (bez PDF)
+# wymagania: streamlit, pillow
+# uruchom: python -m pip install streamlit pillow
+#          python -m streamlit run app.py
 
 import streamlit as st
 from PIL import Image
-import fitz  # PyMuPDF
 from io import BytesIO
-import random
+import random, os, glob
 
-st.set_page_config(page_title="Karty z PDF", layout="wide")
+st.set_page_config(page_title="Karty z PNG", layout="wide")
 
-HAND_SIZE = 3
+DEFAULT_CARDS_DIR = "cards"   # <- tutaj trzymaj swoje pliki .png
 
-def load_pdf_to_images(pdf_bytes: bytes, dpi: int = 144):
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+# ---------- Narzędzia ----------
+def load_png_bytes_from_folder(folder: str):
+    """Wczytaj wszystkie PNG jako bytes w kolejności alfabetycznej."""
+    paths = sorted(glob.glob(os.path.join(folder, "*.png")))
     imgs = []
-    for page in doc:
-        pix = page.get_pixmap(dpi=dpi, alpha=False)
-        imgs.append(pix.tobytes("png"))
-    doc.close()
-    return imgs
+    for p in paths:
+        with Image.open(p) as im:
+            buf = BytesIO()
+            im.convert("RGBA").save(buf, format="PNG")
+            imgs.append(buf.getvalue())
+    return imgs, paths
 
 def ensure_state():
     for k, v in {
         "images": [],
+        "image_paths": [],
         "deck": [],
         "discard": [],
         "hand": [],
-        "file_name": None,
-        "exhausted": False,   # <-- flaga: talia wyczerpana
+        "exhausted": False,
+        "cards_dir": DEFAULT_CARDS_DIR,
+        "hand_size": 3,
     }.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
+        if k not in st.session_state: st.session_state[k] = v
 
-def init_deck(images, file_name):
+def init_deck(images, image_paths):
     st.session_state.images = images
-    st.session_state.file_name = file_name
+    st.session_state.image_paths = image_paths
     st.session_state.deck = list(range(len(images)))
     random.shuffle(st.session_state.deck)
     st.session_state.discard = []
     st.session_state.hand = []
     st.session_state.exhausted = False
 
-def draw_to_three():
-    """
-    Dobiera karty z 'deck' do osiągnięcia HAND_SIZE.
-    ZMIANA: jeśli talia się skończy, NIE sięgamy do discard — po prostu kończymy.
-    """
+def draw_to_hand_size():
     hand = st.session_state.hand
     deck = st.session_state.deck
+    target = st.session_state.hand_size
 
-    while len(hand) < HAND_SIZE and deck:
+    while len(hand) < target and deck:
         nxt = deck.pop()
         if nxt not in hand:
             hand.append(nxt)
 
-    # Jeśli nie udało się uzupełnić do pełnej ręki i talia pusta — oznacz koniec
-    st.session_state.exhausted = len(hand) < HAND_SIZE and len(deck) == 0
-
-def render_hand_and_discard_ui():
-    hand = st.session_state.hand
-    images = st.session_state.images
-
-    cols = st.columns(HAND_SIZE, gap="small")
-    discard_flags = [False] * len(hand)
-
-    for pos, idx in enumerate(hand):
-        with cols[pos % HAND_SIZE]:
-            img = Image.open(BytesIO(images[idx]))
-            st.image(img, use_column_width=True)
-            discard_flags[pos] = st.checkbox("Odrzuć tę kartę", key=f"discard_{pos}")
-
-    left, right = st.columns([1, 3])
-
-    # Przyciski: dobieranie działa tylko jeśli talia nie jest pusta
-    if left.button("Dobierz do 3", disabled=not st.session_state.deck):
-        draw_to_three()
-        # reset checkboxów
-        for pos in range(len(hand)):
-            st.session_state[f"discard_{pos}"] = False
-
-    if right.button("Odrzuć zaznaczone i dobierz"):
-        # usuwamy od końca, by nie popsuć indeksów
-        for pos in range(len(hand) - 1, -1, -1):
-            if st.session_state.get(f"discard_{pos}", False):
-                st.session_state.discard.append(hand.pop(pos))
-                st.session_state[f"discard_{pos}"] = False
-        # po odrzuceniu próbujemy dobrać — jeśli talia pusta, ręka może być < HAND_SIZE
-        if st.session_state.deck:
-            draw_to_three()
-        else:
-            st.session_state.exhausted = len(st.session_state.hand) < HAND_SIZE
-
-    # Komunikaty stanu
-    if st.session_state.exhausted:
-        st.warning("Talia się skończyła. Odrzucone karty nie wracają do puli, więc nie da się już dobrać nowych.")
+    st.session_state.exhausted = len(hand) < target and len(deck) == 0
 
 def counters():
-    hand = len(st.session_state.hand)
-    deck = len(st.session_state.deck)
-    discard = len(st.session_state.discard)
-    st.caption(f"Ręka: **{hand}** | W talii: **{deck}** | Odrzucone: **{discard}**")
+    st.caption(
+        f"Ręka: **{len(st.session_state.hand)}** | "
+        f"W talii: **{len(st.session_state.deck)}** | "
+        f"Odrzucone: **{len(st.session_state.discard)}** | "
+        f"Kart w zestawie: **{len(st.session_state.images)}**"
+    )
 
+def render_hand_ui():
+    hand = st.session_state.hand
+    images = st.session_state.images
+    size = st.session_state.hand_size
+
+    cols = st.columns(size if size > 0 else 1, gap="small")
+    for pos, idx in enumerate(hand):
+        with cols[pos % max(size,1)]:
+            img = Image.open(BytesIO(images[idx]))
+            st.image(img, use_column_width=True)
+            st.checkbox("Odrzuć tę kartę", key=f"discard_{pos}")
+
+# ---------- Aplikacja ----------
 def main():
     ensure_state()
-    st.title("Karty z PDF (odrzucone nie wracają)")
-    st.write("Wgraj PDF, każda strona to karta. Losuj 3, odrzucaj, dobieraj (bez powrotu odrzuconych).")
+    st.title("Karty z PNG (stałe zasoby)")
 
-    uploaded = st.file_uploader("Wgraj PDF", type=["pdf"])
-    if uploaded is not None and uploaded.name != st.session_state.get("file_name"):
-        with st.spinner("Renderuję PDF…"):
-            imgs = load_pdf_to_images(uploaded.read())
+    with st.sidebar:
+        st.header("Ustawienia")
+        st.session_state.cards_dir = st.text_input("Folder z kartami", st.session_state.cards_dir)
+        st.session_state.hand_size = st.number_input("Wielkość ręki", min_value=1, max_value=10, value=st.session_state.hand_size, step=1)
+        seed = st.text_input("Seed losowania (opcjonalnie)", value="")
+        col_a, col_b = st.columns(2)
+        reload_clicked = col_a.button("🔄 Przeładuj karty")
+        reset_clicked = col_b.button("♻️ Reset rundy")
+
+    # Przeładowanie kart z dysku
+    if reload_clicked:
+        imgs, paths = load_png_bytes_from_folder(st.session_state.cards_dir)
         if not imgs:
-            st.error("PDF nie zawiera stron.")
-            return
-        init_deck(imgs, uploaded.name)
-        st.success(f"Wczytano: {uploaded.name} — kart: {len(imgs)}")
+            st.error(f"Brak plików .png w: {st.session_state.cards_dir}")
+        else:
+            if seed: random.seed(seed)
+            init_deck(imgs, paths)
+            st.success(f"Wczytano {len(imgs)} kart z '{st.session_state.cards_dir}'")
 
+    # Reset rundy (z aktualnego zestawu)
+    if reset_clicked and st.session_state.images:
+        if seed: random.seed(seed)
+        init_deck(st.session_state.images, st.session_state.image_paths)
+        st.success("Zresetowano rundę i przetasowano talię.")
+
+    # Auto-inicjalizacja przy pierwszym uruchomieniu (jeśli folder istnieje)
+    if not st.session_state.images:
+        if os.path.isdir(st.session_state.cards_dir):
+            imgs, paths = load_png_bytes_from_folder(st.session_state.cards_dir)
+            if imgs:
+                if seed: random.seed(seed)
+                init_deck(imgs, paths)
+            else:
+                st.info(f"Wrzuć pliki PNG do folderu '{st.session_state.cards_dir}' i kliknij „Przeładuj karty”.")
+        else:
+            st.info(f"Utwórz folder '{st.session_state.cards_dir}', dodaj tam swoje PNG i kliknij „Przeładuj karty” w sidebarze.")
+
+    # Główne UI
     if st.session_state.images:
-        if not st.session_state.hand:  # pierwsze dociągnięcie
-            draw_to_three()
+        if not st.session_state.hand:
+            draw_to_hand_size()
+
         counters()
-        render_hand_and_discard_ui()
+        render_hand_ui()
         counters()
+
+        left, right = st.columns([1, 3])
+
+        if left.button("Dobierz do pełnej ręki", disabled=not st.session_state.deck):
+            draw_to_hand_size()
+            # wyczyść zaznaczenia
+            for pos in range(len(st.session_state.hand)):
+                st.session_state[f"discard_{pos}"] = False
+
+        if right.button("Odrzuć zaznaczone i dobierz"):
+            # Usuwamy od końca, żeby indeksy się nie rozjechały
+            for pos in range(len(st.session_state.hand) - 1, -1, -1):
+                if st.session_state.get(f"discard_{pos}", False):
+                    st.session_state.discard.append(st.session_state.hand.pop(pos))
+                    st.session_state[f"discard_{pos}"] = False
+            if st.session_state.deck:
+                draw_to_hand_size()
+            else:
+                st.session_state.exhausted = len(st.session_state.hand) < st.session_state.hand_size
+
+        if st.session_state.exhausted:
+            st.warning("Talia się skończyła. Odrzucone karty nie wracają do puli — nowych już nie dobierzesz.")
     else:
-        st.info("Najpierw wgraj PDF 👆")
+        st.stop()
 
 if __name__ == "__main__":
     main()
